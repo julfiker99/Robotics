@@ -1,0 +1,101 @@
+// Main programm - Robot controler
+// LCD =================================   
+#include <LiquidCrystal_PCF8574.h>
+#include <Wire.h>
+LiquidCrystal_PCF8574   lcd(0x38); // I2C
+int lcdpres = 0;                                // to put to   0 if LCD not present
+// EEPROM ==============================
+#define EEPROM_I2C_ADDRESS   0x50  // I2C
+int eprdata[6];                  // data read from eeprom
+int   epractmax[2];                // cursor position to/from eeprom
+// BLUETOOTH ===========================
+#include   "SoftwareSerial.h"
+SoftwareSerial bluetooth(2, 3);  // RX, TX
+int bluerec   ;                    // bluetooth reception variable
+// SERVOS =======================================================
+#include   <Adafruit_PWMServoDriver.h>
+Adafruit_PWMServoDriver pca= Adafruit_PWMServoDriver(0x40);   // I2C
+#define nbPCAServo 6
+int MIN_IMP [nbPCAServo] ={500, 500, 500, 500,   500, 500};
+int MAX_IMP [nbPCAServo] ={2500, 2500, 2500, 2500, 2500, 2500};
+int   MIN_ANG [nbPCAServo] ={0, 0, 0, 0, 0, 0} ;
+int MAX_ANG [nbPCAServo] ={180,180,   180, 180, 180, 180 };               // servo angle capability
+int tabanglim[2][6]   = {{0,43,65,0,10,80}, {180,177,180,140,175,116}};   // Limits the servo stroke.
+int   servodelay(15);              // delay for servo to achieve rotation
+int servo;                        // current servo number (from 0 to 5)
+int homepos[6] =   {93, 124, 115, 118, 83, 80};   // robot home position (will be stored to eeprom   on setup
+int tabserpos[6] = {90,90,90,90,90,90};  // to store current servo position/angle
+String   rot;                              // current direction of rotation (L or R)
+//   Other variables =====================
+int prog[2][10] = {{2,5,6,3,7,8,4,9,11,0},   {0,1,0,0,1,0,0,1,0,0}};  // little scenario as an example 
+
+//
+// == SETUP   ============================================================
+void setup() {
+//   SERIAL init =========================
+Serial.begin(9600);
+delay(500);
+//   LCD init ============================ 
+Wire.begin();
+Wire.beginTransmission(0x38);   
+if (lcdpres == 1) {lcd.begin(16, 2); lcdw(0,0,0," "); lcdw(1,0,0," READY   TO WORK"); }
+// BLUETOOTH init ====================== 
+bluetooth.begin(9600);
+//   SERVOINIT =================================
+pca.begin();
+pca.setPWMFreq(60);   // Analog servos run at ~60 Hz updates
+delay(500);
+// EEPROM init =======================
+//   EEPROM structure : two first bytes contains the current pointer and the max of records
+//   the a multiple of 6 bytes represending robot positions, one record represents 6   bytes, each for one servo
+readeeprom(0,2); epractmax[0] = eprdata[0]; epractmax[1]   = eprdata[1]; // pos 0,1 of eeprom indexes
+delay(100);
+writeeeprom(2,homepos,6);   // write robot home position
+delay(100);
+servomove(0,0); // move robot to   home position 
+// end EEPROM init
+Serial.println(" READY TO WORK");
+}
+//   == LOOP ==============================================================
+void loop()   {
+delay(100);
+if (bluetooth.available()) { // Si donne Bluetooth reue...
+     bluerec = bluetooth.read();
+    switch(bluerec)
+      { 
+      case   'A': servo = 0;  rot = 'L';  break;
+      case 'B': servo = 0;  rot = 'R';  break;
+       case 'C': servo = 1;  rot = 'L';  break;
+      case 'D': servo = 1;  rot   = 'R';  break;
+      case 'E': servo = 2;  rot = 'L';  break;
+      case 'F':   servo = 2;  rot = 'R';  break;
+      case 'G': servo = 3;  rot = 'L';  break;
+       case 'H': servo = 3;  rot = 'R';  break;
+      case 'I': servo = 4;  rot   = 'L';  break;
+      case 'J': servo = 4;  rot = 'R';  break;
+      case 'K':   servo = 5;  rot = 'L';  break;
+      case 'L': servo = 5;  rot = 'R';  break;
+       case 'M': if (epractmax[0] <= (epractmax[1])) {epractmax[0] = epractmax[0]   + 1; listpos(); } rot = ' '; break;  // increase eeprom index
+      case 'N':   if (epractmax[0] > 0)               {epractmax[0] = epractmax[0] - 1; listpos();   } rot = ' '; break;  // decrease eeprom index       
+      case 'Y': listpos();   rot = ' '; break;                                          // display robot position
+       case 'Z': servomove(0,0); rot = ' '; break;                                     //   move robot to home position 
+      case '1': servomove(1,0); rot = ' '; break;                                      // move robot to indicated position
+      case   '2': servomove(2,0); rot = ' '; break;                                     // move   robot to indicated position
+      case '3': servomove(3,0); rot = ' '; break;                                      // move robot to indicated position
+      case   '4': servomove(4,0); rot = ' '; break;                                     // move   robot to indicated position
+      case '6': scenario() ;rot = ' '; break;                                         //   move robot to indicated position
+      case '7': eeprom_read_test(); rot = '   '; break;                                 // display eeprom content
+      case   '8': servomove(epractmax[0],0); rot = ' '; break;                          // move   robot to home position 
+      case '9': writeprom(epractmax[0]); rot = ' '; break;                             // write robot position to eeprom
+      default:   rot = ' ';    break; 
+      } // end switch(bluerec)
+      while((bluerec   != 'S') && (rot != " "))
+         { 
+         if ((rot == "L") && (tabserpos[servo]   > tabanglim[0][servo]))   { tabserpos[servo] = tabserpos[servo] - 1; } // decrease   servo position and verify servo stroke
+         if ((rot == "R") && (tabserpos[servo]   < tabanglim[1][servo]))   { tabserpos[servo] = tabserpos[servo] + 1; } // increase   servo position and verify servo stroke 
+         servowrite(servo, tabserpos[servo]);   
+         delay(100);  // to allow slow motion
+         bluerec = bluetooth.read();   
+         } // end while(bluerec != 'S')
+} // end if (bluetooth.available()
+}   // end loop
